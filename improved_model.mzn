@@ -52,84 +52,50 @@ array[M, S] of int: matches =
     rb[p, w, s]
     | w in W, p in P, s in S
   ]);
+  
 
 % DECISION VARIABLES
 
 % The Match ID assigned to period p in week w.
-array[P, W] of var M: matches_idx; 
-
-% Count of how many times team t played in week w.
-array[W, T] of var P: Cw;  
+array[P, W] of var M: matches_idx;
+ 
 
 % RE-INSERTED: Count of how many times team t plays in period p.
 % We calculate this explicitly to enforce the limit.
 array[P, T] of var W: Cp;
 
+
 % CORE CONSTRAINTS
 
-% 1. VALIDITY
-constraint alldifferent(matches_idx);
-
-% 2. CHANNELING FOR WEEKS (Cw)
+% 1. constraint solution based on round robin generation
 constraint forall(w in W)(
-    global_cardinality(
-        [matches[matches_idx[p, w], s] | p in P, s in S], 
-        [t | t in T],
-        [Cw[w, t] | t in T]
-    )
-);
-
-% 3. WEEKLY CONSTRAINT
-constraint forall(w in W, t in T)( Cw[w, t] = 1);
-
-% 4. PERIOD CONSTRAINT 
-% We calculate Cp using the 'count' function.
-constraint forall(p in P)(
-  let{
-    % Get the list of match IDs for this period across all weeks
-    array[W] of var int: indexes_of_matches = 
-        array1d(W, [matches_idx[p, w] | w in W]);
-    
-    % Get the list of actual teams playing in those matches
-    array[TeamsInSamePeriod] of var int: teams_in_period = 
-        array1d(TeamsInSamePeriod, [matches[i, s] | i in indexes_of_matches, s in S])
-  } in
-  forall(t in T)(
-    % Use 'count' to calculate how many times team t appears in this period
-    Cp[p, t] = count(teams_in_period, t)
+  forall(p in P)(
+      w * (N div 2) <= matches_idx[p, w] /\ matches_idx[p, w] < (w + 1) * (N div 2)
   )
 );
 
-% 5. LIMIT ON CP
-% Each team can play at most twice in the same period.
-constraint forall(p in P, t in T)(
-    Cp[p, t] <= 2
-);
+% 2. VALIDITY
+constraint alldifferent(matches_idx);
 
-% SYMMETRY BREAKING
-
-% Fix the first week to the default Circle Method order
+% 3. Each team plays at most twice a week
 constraint forall(p in P)(
-    matches_idx[p, 0] = p
+    let {
+        array[int] of var M: period_matches = 
+            array1d([matches_idx[p, w] | w in W]);
+        array[int] of var T: teams = 
+            array1d([matches[period_matches[i], s] | i in index_set(period_matches), s in S]);
+        array[T] of var 0..2*card(W): counts = array1d(T, [Cp[p, t] | t in T]);
+    } in
+    global_cardinality(teams, array1d(T, [t | t in T]), counts)
 );
 
-% Lexicographic ordering of weeks
-constraint symmetry_breaking_constraint(
-    forall(w in min(W)..max(W)-1)(
-        lex_less(
-            [matches_idx[p, w] | p in P],      
-            [matches_idx[p, w+1] | p in P]     
-        )
-    )
-);
-
-% SOLVE STRATEGY
-
-solve 
-:: restart_luby(100) 
-:: relax_and_reconstruct([matches_idx[p, w] | p in P, w in W], 60)  
-:: int_search([matches_idx[p, w] | p in P, w in W], dom_w_deg, indomain_min, complete)  
-satisfy;
+% search strategy
+solve :: int_search(
+    array1d(matches_idx),
+    first_fail,      % Choose variable with smallest domain
+    indomain_min,    % Try smallest value first
+    complete
+) satisfy;
 
 % OUTPUT
 
