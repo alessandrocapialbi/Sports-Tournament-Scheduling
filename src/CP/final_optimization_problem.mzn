@@ -60,10 +60,11 @@ array[M, S] of int: matches =
 array[P, W] of var M: matches_idx;
 
 % CORE CONSTRAINTS
-% Break week symmetry: fix the first match
-constraint matches_idx[0, 0] = 0;
+% Break week symmetry
 constraint symmetry_breaking_constraint(
-  increasing([matches_idx[p, 0] | p in P])
+  forall(p in P)(
+    matches_idx[p, 0] = p
+  )
 );
 
 % 1. constraint solution based on round robin generation
