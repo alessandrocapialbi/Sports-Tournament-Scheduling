@@ -135,3 +135,55 @@ def encode_integer_onehot(name, max_val):
     """
     vars = [Bool(f'{name}_val_{i}') for i in range(max_val + 1)]
     return vars
+
+def encode_exact_count(solver, indicators, count_vars, max_count, name):
+    """Encode that exactly count_vars[k] is true iff exactly k indicators are true."""
+    for k in range(max_count + 1):
+        if k > len(indicators):
+            solver.add(Not(count_vars[k]))
+        elif k == 0:
+            # Count is 0 iff all indicators are false
+            solver.add(Implies(count_vars[0], And([Not(ind) for ind in indicators])))
+            if len(indicators) > 0:
+                solver.add(Implies(And([Not(ind) for ind in indicators]), count_vars[0]))
+        elif k == len(indicators):
+            # Count is len iff all indicators are true
+            solver.add(Implies(count_vars[k], And(indicators)))
+            solver.add(Implies(And(indicators), count_vars[k]))
+        else:
+            # Use at-most and at-least encoding
+            at_least_k = at_most_k_seq([Not(ind) for ind in indicators],
+                                       len(indicators) - k, f'{name}_atleast_{k}')
+            at_most_k_cond = at_most_k_seq(indicators, k, f'{name}_atmost_{k}')
+
+            solver.add(Implies(count_vars[k], And(at_least_k, at_most_k_cond)))
+            solver.add(Implies(And(at_least_k, at_most_k_cond), count_vars[k]))
+
+
+def constrain_total_imbalance(solver, diff_vars, T, N, target):
+    """Add constraint that sum of all team differences equals target."""
+
+    # Find all valid combinations that sum to target
+    def find_combinations(teams_left, current_sum, current_assignment):
+        if teams_left == 0:
+            if current_sum == target:
+                yield current_assignment
+            return
+
+        team_idx = N - teams_left
+        for diff in range(min(N, target - current_sum + 1)):
+            yield from find_combinations(teams_left - 1, current_sum + diff,
+                                         current_assignment + [diff])
+
+    valid_combinations = list(find_combinations(N, 0, []))
+
+    if not valid_combinations:
+        solver.add(False)  # UNSAT
+        return
+
+    combination_constraints = []
+    for combo in valid_combinations:
+        combo_constraint = And([diff_vars[t][combo[t]] for t in T])
+        combination_constraints.append(combo_constraint)
+
+    solver.add(Or(combination_constraints))

@@ -39,9 +39,101 @@ def calculate_params(N):
     return T, S, W, P, M
 
 
-def print_solution(N, W, P, matches, solution):
-    """Print the round robin schedule in a formatted table."""
-    # Print solution
+def extract_solution(model, P, W, M, matches_idx_vars, home_is_first_vars=None,
+                     home_count_vars=None, away_count_vars=None, diff_vars=None, T=None, N=None):
+    """
+    Extract solution from Z3 model.
+
+    Args:
+        model: Z3 model
+        P, W, M: Parameter ranges
+        matches_idx_vars: Match index variables
+        home_is_first_vars: Optional home orientation variables
+        home_count_vars: Optional home count variables
+        away_count_vars: Optional away count variables
+        diff_vars: Optional difference variables
+        T: Optional team range (needed if count vars provided)
+        N: Optional number of teams (needed if count vars provided)
+
+    Returns:
+        Dictionary with 'solution', 'home_first', 'home_counts', 'away_counts', 'diffs', 'imbalance'
+    """
+    solution = {}
+    home_first = {}
+
+    # Extract match assignments
+    for p in P:
+        for w in W:
+            for m in M:
+                if is_true(model.evaluate(matches_idx_vars[p, w][m])):
+                    solution[p, w] = m
+                    break
+
+    # Extract home/away orientation if provided
+    if home_is_first_vars is not None:
+        for p in P:
+            for w in W:
+                home_first[p, w] = is_true(model.evaluate(home_is_first_vars[p, w]))
+
+    # Extract counts and differences if provided
+    home_counts = None
+    away_counts = None
+    diffs = None
+    total_imbalance = None
+
+    if home_count_vars is not None and T is not None and N is not None:
+        home_counts = {}
+        for t in T:
+            for k in range(N):
+                if is_true(model.evaluate(home_count_vars[t][k])):
+                    home_counts[t] = k
+                    break
+
+    if away_count_vars is not None and T is not None and N is not None:
+        away_counts = {}
+        for t in T:
+            for k in range(N):
+                if is_true(model.evaluate(away_count_vars[t][k])):
+                    away_counts[t] = k
+                    break
+
+    if diff_vars is not None and T is not None and N is not None:
+        diffs = {}
+        for t in T:
+            for k in range(N):
+                if is_true(model.evaluate(diff_vars[t][k])):
+                    diffs[t] = k
+                    break
+        total_imbalance = sum(diffs.values())
+
+    return {
+        'solution': solution,
+        'home_first': home_first,
+        'home_counts': home_counts,
+        'away_counts': away_counts,
+        'diffs': diffs,
+        'imbalance': total_imbalance
+    }
+
+
+def print_solution(N, W, P, match_pairs, extracted_solution):
+    """
+    Print the schedule in a formatted table.
+
+    Args:
+        N: Number of teams
+        W: Week range
+        P: Period range
+        match_pairs: Dictionary mapping (match_id, slot) -> team_id
+        extracted_solution: Dictionary returned by extract_solution()
+    """
+    solution = extracted_solution['solution']
+    home_first = extracted_solution.get('home_first', {})
+    home_counts = extracted_solution.get('home_counts')
+    away_counts = extracted_solution.get('away_counts')
+    diffs = extracted_solution.get('diffs')
+    total_imbalance = extracted_solution.get('imbalance')
+
     print("\n" + "=" * 60)
     print(f"SOLUTION FOUND for N={N} teams")
     print("=" * 60)
@@ -54,32 +146,32 @@ def print_solution(N, W, P, matches, solution):
         print("\n    ", end="")
         for p in P:
             m = solution[p, w]
-            home = matches[m, 0]
-            away = matches[m, 1]
+
+            # Determine home/away based on whether home_first is available
+            if (p, w) in home_first:
+                if home_first[p, w]:
+                    home = match_pairs[m, 0]
+                    away = match_pairs[m, 1]
+                else:
+                    home = match_pairs[m, 1]
+                    away = match_pairs[m, 0]
+            else:
+                # Default: first team is home (for backward compatibility)
+                home = match_pairs[m, 0]
+                away = match_pairs[m, 1]
+
             print(f"{home} vs {away}\t", end="")
         print("\n")
 
-def compute_imbalance(P, W, T, solution_dict, matches):
-    """Compute home-away imbalance from a solution."""
-    home_counts = {t: 0 for t in T}
-    away_counts = {t: 0 for t in T}
+    # Print balance information if available
+    if home_counts is not None and away_counts is not None:
+        print("\nHome/Away Balance:")
+        T = range(N)
+        for t in T:
+            diff_str = f", Diff={diffs[t]}" if diffs is not None else ""
+            print(f"Team {t}: Home={home_counts[t]}, Away={away_counts[t]}{diff_str}")
 
-    for p in P:
-        for w in W:
-            m = solution_dict[p, w]
-            home_counts[matches[m, 0]] += 1
-            away_counts[matches[m, 1]] += 1
+        if total_imbalance is not None:
+            print(f"\nTotal Imbalance: {total_imbalance}")
 
-    imbalance = sum(abs(home_counts[t] - away_counts[t]) for t in T)
-    return imbalance, home_counts, away_counts
-
-def extract_solution(P, W, M, matches_idx_vars, model):
-    """Extract solution from Z3 model."""
-    solution = {}
-    for p in P:
-        for w in W:
-            for m in M:
-                if is_true(model.evaluate(matches_idx_vars[p, w][m])):
-                    solution[p, w] = m
-                    break
-    return solution
+    print("=" * 60)
