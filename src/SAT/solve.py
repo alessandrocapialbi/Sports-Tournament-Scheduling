@@ -3,129 +3,18 @@ from z3 import *
 from utils import *
 from sat_encodings import *
 
-def satisfy(N, solver):
-    """Solve the sports scheduling problem for N teams using pure boolean SAT."""
-    assert N % 2 == 0, "Number of teams must be even"
 
-    # Parameters
-    T, S, W, P, M = calculate_params(N)
+def add_core_constraints(solver, N, T, S, W, P, M, match_pairs, matches_idx_vars):
+    """
+    Add core scheduling constraints that are common to both satisfy() and optimization.
 
-    rb, matches = generate_rb_and_flattened(N, W, P, S)
-
-    # Decision variables: matches_idx[p][w] using one-hot encoding
-    # matches_idx_vars[p][w][m] is true iff period p in week w has match m
-    matches_idx_vars = {}
-    for p in P:
-        for w in W:
-            vars = encode_integer_onehot(f'midx_{p}_{w}', len(M) - 1)
-            matches_idx_vars[p, w] = vars
-
+    Returns:
+        Dictionary with 'matches_idx_vars' and other constraint-related variables
+    """
     # Each position has exactly one match assigned (one-hot constraint)
     for p in P:
         for w in W:
-            # Use Heule encoding for exactly-one (most efficient for this)
             solver.add(exactly_one_he(matches_idx_vars[p, w], f'eo_midx_{p}_{w}'))
-
-    # CONSTRAINT 1: matches_idx[0, 0] = 0
-    solver.add(matches_idx_vars[0, 0][0])
-
-    # CONSTRAINT 2: All different (each match ID used exactly once across all positions)
-    for m in M:
-        # Collect all positions that could have match m
-        indicators = []
-        for p in P:
-            for w in W:
-                indicators.append(matches_idx_vars[p, w][m])
-
-        # Exactly one position has this match
-        # Use Heule encoding for exactly-one
-        solver.add(exactly_one_he(indicators, f'alldiff_m_{m}'))
-
-    # CONSTRAINT 3: Range constraint - week w uses matches [w*(N/2), (w+1)*(N/2))
-    for w in W:
-        for p in P:
-            low = w * (N // 2)
-            high = (w + 1) * (N // 2)
-            # Only matches in [low, high) can be true
-            for m in M:
-                if not (low <= m < high):
-                    solver.add(Not(matches_idx_vars[p, w][m]))
-
-    # CONSTRAINT 4: Each team plays at most twice in any period
-    for period in P:
-        for team in T:
-            # Collect indicators: team appears in matches_idx[period, w]
-            team_appears = []
-
-            for w in W:
-                # For this week, check which matches are valid (due to range constraint)
-                low = w * (N // 2)
-                high = (w + 1) * (N // 2)
-
-                for m in range(low, high):
-                    # Does match m contain this team?
-                    match_has_team = (matches[m, 0] == team or matches[m, 1] == team)
-
-                    if match_has_team:
-                        # If matches_idx[period, w] = m, then team appears
-                        team_appears.append(matches_idx_vars[period, w][m])
-
-            # At most 2 of these can be true
-            # Use sequential encoding for at-most-k (efficient for small k)
-            if len(team_appears) > 2:
-                solver.add(at_most_k_seq(team_appears, 2, f'amt2_t{team}_p{period}'))
-            elif len(team_appears) == 2:
-                # Just use pairwise
-                solver.add(at_most_one_np(team_appears))
-
-    # Solve
-    result = solver.check()
-
-    if result == sat:
-        model = solver.model()
-
-        # Extract solution
-        solution = extract_solution(model, P, W, M, matches_idx_vars)
-
-        # Print solution
-        print_solution(N, W, P, matches, solution)
-
-        return solution
-    else:
-        print("No solution found (UNSAT)")
-        return None
-
-
-def solve_with_optimization(N, solver):
-    """
-    Solve the sports scheduling problem with home/away balance optimization.
-
-    Args:
-        N: Number of teams (must be even)
-        solver: the Z3 solver
-
-    Returns:
-        Dictionary with solution details or None if UNSAT
-    """
-    assert N % 2 == 0, "Number of teams must be even"
-
-    T, S, W, P, M = calculate_params(N)
-    rb, match_pairs = generate_rb_and_flattened(N, W, P, S)
-
-    # Decision variables: matches_idx[p][w] using one-hot encoding
-    matches_idx_vars = {}
-    for p in P:
-        for w in W:
-            vars = encode_integer_onehot(f'midx_{p}_{w}', len(M) - 1)
-            matches_idx_vars[p, w] = vars
-            solver.add(exactly_one_he(vars, f'eo_midx_{p}_{w}'))
-
-    # Decision variables: home_is_first[p][w] - which team in pair plays home
-    # If True, match_pairs[m, 0] is home; if False, match_pairs[m, 1] is home
-    home_is_first_vars = {}
-    for p in P:
-        for w in W:
-            home_is_first_vars[p, w] = Bool(f'home_first_{p}_{w}')
 
     # CONSTRAINT 1: matches_idx[0, 0] = 0 (symmetry breaking)
     solver.add(matches_idx_vars[0, 0][0])
@@ -157,7 +46,6 @@ def solve_with_optimization(N, solver):
                 high = (w + 1) * (N // 2)
 
                 for m in range(low, high):
-                    # Team appears if match m is assigned AND team is in that match
                     match_has_team = (match_pairs[m, 0] == team or
                                       match_pairs[m, 1] == team)
 
@@ -169,8 +57,77 @@ def solve_with_optimization(N, solver):
             elif len(team_appears) == 2:
                 solver.add(at_most_one_np(team_appears))
 
+
+def satisfy(N):
+    """Solve the sports scheduling problem for N teams using pure boolean SAT."""
+    assert N % 2 == 0, "Number of teams must be even"
+
+    # Parameters
+    T, S, W, P, M = calculate_params(N)
+    rb, matches = generate_rb_and_flattened(N, W, P, S)
+
+    # Decision variables: matches_idx[p][w] using one-hot encoding
+    matches_idx_vars = {}
+    for p in P:
+        for w in W:
+            vars = encode_integer_onehot(f'midx_{p}_{w}', len(M) - 1)
+            matches_idx_vars[p, w] = vars
+
+    # Create solver
+    solver = Solver()
+
+    # Add core constraints
+    add_core_constraints(solver, N, T, S, W, P, M, matches, matches_idx_vars)
+
+    # Solve
+    result = solver.check()
+
+    if result == sat:
+        model = solver.model()
+        solution = extract_solution(model, P, W, M, matches_idx_vars)
+        print_solution(N, W, P, matches, solution)
+        return solution
+    else:
+        print("No solution found (UNSAT)")
+        return None
+
+
+def solve_with_optimization(N):
+    """
+    Solve the sports scheduling problem with home/away balance optimization.
+
+    Args:
+        N: Number of teams (must be even)
+
+    Returns:
+        Dictionary with solution details or None if UNSAT
+    """
+    assert N % 2 == 0, "Number of teams must be even"
+
+    T, S, W, P, M = calculate_params(N)
+    rb, match_pairs = generate_rb_and_flattened(N, W, P, S)
+
+    # Create solver
+    solver = Solver()
+
+    # Decision variables: matches_idx[p][w] using one-hot encoding
+    matches_idx_vars = {}
+    for p in P:
+        for w in W:
+            vars = encode_integer_onehot(f'midx_{p}_{w}', len(M) - 1)
+            matches_idx_vars[p, w] = vars
+
+    # Decision variables: home_is_first[p][w]
+    home_is_first_vars = {}
+    for p in P:
+        for w in W:
+            home_is_first_vars[p, w] = Bool(f'home_first_{p}_{w}')
+
+    # Add core scheduling constraints
+    add_core_constraints(solver, N, T, S, W, P, M, match_pairs, matches_idx_vars)
+
     # HOME/AWAY BALANCE OPTIMIZATION
-    # Count variables for each team: how many times they play home/away
+    # Count variables for each team
     home_count_vars = {}
     away_count_vars = {}
 
@@ -183,7 +140,6 @@ def solve_with_optimization(N, solver):
 
     # Link count variables to actual home/away assignments
     for t in T:
-        # Collect indicators for when team t plays HOME
         team_home_indicators = []
         team_away_indicators = []
 
@@ -195,9 +151,6 @@ def solve_with_optimization(N, solver):
                 for m in range(low, high):
                     match_assigned = matches_idx_vars[p, w][m]
 
-                    # Team t plays home if:
-                    # - Match m assigned AND home_is_first=True AND t is first in pair, OR
-                    # - Match m assigned AND home_is_first=False AND t is second in pair
                     if match_pairs[m, 0] == t:
                         team_home_indicators.append(
                             And(match_assigned, home_is_first_vars[p, w])
@@ -213,11 +166,8 @@ def solve_with_optimization(N, solver):
                             And(match_assigned, home_is_first_vars[p, w])
                         )
 
-        # Encode exact cardinality for HOME count
         encode_exact_count(solver, team_home_indicators, home_count_vars[t],
                            N - 1, f'home_t{t}')
-
-        # Encode exact cardinality for AWAY count
         encode_exact_count(solver, team_away_indicators, away_count_vars[t],
                            N - 1, f'away_t{t}')
 
@@ -252,7 +202,7 @@ def solve_with_optimization(N, solver):
         if result == sat:
             print(f"✓ Found solution with imbalance = {target}")
             best_solution = extract_solution(
-                solver.model(), P, W, M,  # M is 4th (the range)
+                solver.model(), P, W, M,
                 matches_idx_vars, home_is_first_vars,
                 home_count_vars, away_count_vars, diff_vars, T, N
             )
@@ -261,13 +211,4 @@ def solve_with_optimization(N, solver):
             break
         solver.pop()
 
-        return best_solution
-
-
-if __name__ == "__main__":
-    solver = Solver()
-    N = 8
-    T, S, W, P, M = calculate_params(N)
-    sol = satisfy(N, solver)
-    _, matches = generate_rb_and_flattened(N, W, P, S)
-    solve_with_optimization(N, solver)
+    return best_solution
