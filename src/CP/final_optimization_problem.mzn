@@ -54,7 +54,7 @@ array[M, S] of int: matches =
   ]);
   
 
-% DECISION VARIABLE
+% DECISION VARIABLES
 
 % The Match ID assigned to period p in week w.
 array[P, W] of var M: matches_idx;
