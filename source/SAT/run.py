@@ -115,7 +115,7 @@ Examples:
                         "time": 300,
                         "optimal": False,
                         "obj": None,
-                        "sol": None
+                        "sol": []
                     }
                 }
                 all_results.update(json_result)
@@ -128,7 +128,7 @@ Examples:
                     "time": 300,
                     "optimal": False,
                     "obj": None,
-                    "sol": None
+                    "sol": []
                 }
             }
             all_results.update(json_result)
@@ -173,7 +173,7 @@ Examples:
                         "time": 300,
                         "optimal": False,
                         "obj": None,
-                        "sol": None
+                        "sol": []
                     }
                 }
                 all_results.update(json_result)
@@ -186,7 +186,7 @@ Examples:
                     "time": 300,
                     "optimal": False,
                     "obj": None,
-                    "sol": None
+                    "sol": []
                 }
             }
             all_results.update(json_result)

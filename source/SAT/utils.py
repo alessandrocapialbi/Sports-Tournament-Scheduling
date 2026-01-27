@@ -177,7 +177,7 @@ def format_json(N, P, W, match_pairs, extracted_solution, runtime, approach_name
             "time": time_floored,
             "optimal": is_optimal,
             "obj": objective_value,
-            "sol": sol_matrix
+            "sol": sol_matrix if sol_matrix else []
         }
     }
 
