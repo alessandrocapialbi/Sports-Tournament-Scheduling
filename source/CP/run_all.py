@@ -12,7 +12,7 @@ def main():
     """
     Run this script from parent dir.
     """
-    for N in range(6, 7, 2):
+    for N in range(6, 23, 2):
         print("\n==============================")
         print(f"Launching run for N = {N}")
         print("==============================")
