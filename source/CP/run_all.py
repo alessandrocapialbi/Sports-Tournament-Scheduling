@@ -2,14 +2,17 @@ import subprocess
 import sys
 
 # Configuration
-SCRIPT_NAME = "source/CP/run.py"     # previous script
+SCRIPT_NAME = "source/CP/run.py"
 SOURCE_DIR = "source/CP"
 OUTPUT_DIR = "res/CP"
 TIMEOUT = 300
 
 
 def main():
-    for N in range(6, 23, 2):  # 6,8,...,22
+    """
+    Run this script from parent dir.
+    """
+    for N in range(6, 7, 2):
         print("\n==============================")
         print(f"Launching run for N = {N}")
         print("==============================")
