@@ -10,7 +10,6 @@ TIMEOUT = 300  # seconds
 
 def main():
     # Run from parent folder
-    script_name = "./source/SAT/solve.py"
     save_dir = "./res/SAT"
 
     os.makedirs(save_dir, exist_ok=True)
