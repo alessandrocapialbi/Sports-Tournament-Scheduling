@@ -40,24 +40,21 @@ def calculate_params(N):
     return T, S, W, P, M
 
 
-def extract_solution(model, P, W, M, matches_idx_vars, home_is_first_vars=None,
-                     home_count_vars=None, away_count_vars=None, diff_vars=None, T=None, N=None):
+def extract_solution(
+        model,
+        P,
+        W,
+        M,
+        matches_idx_vars,
+        home_is_first_vars=None,
+        home_count_vars=None,
+        away_count_vars=None,
+        diff_vars=None,
+        T=None,
+        N=None
+):
     """
     Extract solution from Z3 model.
-
-    Args:
-        model: Z3 model
-        P, W, M: Parameter ranges
-        matches_idx_vars: Match index variables
-        home_is_first_vars: Optional home orientation variables
-        home_count_vars: Optional home count variables
-        away_count_vars: Optional away count variables
-        diff_vars: Optional difference variables
-        T: Optional team range (needed if count vars provided)
-        N: Optional number of teams (needed if count vars provided)
-
-    Returns:
-        Dictionary with 'solution', 'home_first', 'home_counts', 'away_counts', 'diffs', 'imbalance'
     """
     solution = {}
     home_first = {}
@@ -117,24 +114,18 @@ def extract_solution(model, P, W, M, matches_idx_vars, home_is_first_vars=None,
     }
 
 
-def format_json(N, P, W, match_pairs, extracted_solution, runtime, approach_name,
-                is_optimal=True, objective_value=None):
+def format_json(
+        P,
+        W,
+        match_pairs,    # matches flattened array
+        extracted_solution, # the solution from extract_solution
+        runtime,
+        approach_name,
+        is_optimal=True,
+        objective_value=None
+):
     """
     Format solution as JSON according to specification.
-
-    Args:
-        N: Number of teams
-        P: Period range
-        W: Week range
-        match_pairs: Dictionary mapping (match_id, slot) -> team_id
-        extracted_solution: Dictionary returned by extract_solution()
-        runtime: Runtime in seconds (float)
-        approach_name: Name of the approach (e.g., "SAT_Basic", "SAT_Optimized")
-        is_optimal: Whether the solution is optimal
-        objective_value: Objective function value (None for decision problems)
-
-    Returns:
-        Dictionary in the required JSON format
     """
     solution = extracted_solution['solution']
     home_first = extracted_solution.get('home_first', {})
@@ -183,13 +174,6 @@ def format_json(N, P, W, match_pairs, extracted_solution, runtime, approach_name
 
 
 def save_json(json_data, filename):
-    """
-    Save JSON data to file.
-
-    Args:
-        json_data: Dictionary to save
-        filename: Output filename
-    """
     with open(filename, 'w') as f:
         json.dump(json_data, f, indent=4)
     print(f"\nSolution saved to {filename}")
@@ -198,13 +182,6 @@ def save_json(json_data, filename):
 def print_solution(N, W, P, match_pairs, extracted_solution):
     """
     Print the schedule in a formatted table.
-
-    Args:
-        N: Number of teams
-        W: Week range
-        P: Period range
-        match_pairs: Dictionary mapping (match_id, slot) -> team_id
-        extracted_solution: Dictionary returned by extract_solution()
     """
     solution = extracted_solution['solution']
     home_first = extracted_solution.get('home_first', {})
@@ -235,7 +212,7 @@ def print_solution(N, W, P, match_pairs, extracted_solution):
                     home = match_pairs[m, 1]
                     away = match_pairs[m, 0]
             else:
-                # Default: first team is home (for backward compatibility)
+                # Default: first team is home
                 home = match_pairs[m, 0]
                 away = match_pairs[m, 1]
 

@@ -1,10 +1,6 @@
 from z3 import *
 from itertools import combinations
 
-# ============================================================================
-# AT MOST ONE ENCODINGS
-# ============================================================================
-
 # Naive Pairwise
 def at_least_one_np(bool_vars):
     return Or(bool_vars)
@@ -81,10 +77,7 @@ def exactly_one_he(bool_vars, name):
     return And(at_most_one_he(bool_vars, name), at_least_one_he(bool_vars))
 
 
-# ============================================================================
-# AT MOST K ENCODING (Sequential Counter)
-# ============================================================================
-
+# at most k sequential encoding
 def at_most_k_seq(bool_vars, k, name):
     """Sequential counter encoding for at-most-k constraint.
     Based on Sinz's sequential encoding."""
@@ -124,15 +117,9 @@ def at_most_k_seq(bool_vars, k, name):
     )
 
 
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
+# utils encoding function
 
 def encode_integer_onehot(name, max_val):
-    """
-    One-hot encoding for integers 0..max_val.
-    Returns list of boolean variables where exactly one is true.
-    """
     vars = [Bool(f'{name}_val_{i}') for i in range(max_val + 1)]
     return vars
 
@@ -170,7 +157,6 @@ def constrain_total_imbalance(solver, diff_vars, T, N, target):
                 yield current_assignment
             return
 
-        team_idx = N - teams_left
         for diff in range(min(N, target - current_sum + 1)):
             yield from find_combinations(teams_left - 1, current_sum + diff,
                                          current_assignment + [diff])

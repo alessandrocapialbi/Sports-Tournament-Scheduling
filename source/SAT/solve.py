@@ -1,17 +1,14 @@
-from z3 import *
+import argparse
 
-from utils import *
 from sat_encodings import *
+from utils import *
 
 
 def add_core_constraints(solver, N, T, S, W, P, M, match_pairs, matches_idx_vars):
     """
-    Add core scheduling constraints that are common to both satisfy() and optimization.
-
-    Returns:
-        Dictionary with 'matches_idx_vars' and other constraint-related variables
+    Add core scheduling constraints that are common to both satisfaction and optimization.
     """
-    # Each position has exactly one match assigned (one-hot constraint)
+    # Each position has exactly one match assigned
     for p in P:
         for w in W:
             solver.add(exactly_one_he(matches_idx_vars[p, w], f'eo_midx_{p}_{w}'))
@@ -59,7 +56,6 @@ def add_core_constraints(solver, N, T, S, W, P, M, match_pairs, matches_idx_vars
 
 
 def satisfy(N):
-    """Solve the sports scheduling problem for N teams using pure boolean SAT."""
     assert N % 2 == 0, "Number of teams must be even"
 
     # Parameters
@@ -92,16 +88,7 @@ def satisfy(N):
         return None
 
 
-def solve_with_optimization(N):
-    """
-    Solve the sports scheduling problem with home/away balance optimization.
-
-    Args:
-        N: Number of teams (must be even)
-
-    Returns:
-        Dictionary with solution details or None if UNSAT
-    """
+def optimize(N):
     assert N % 2 == 0, "Number of teams must be even"
 
     T, S, W, P, M = calculate_params(N)
@@ -166,10 +153,8 @@ def solve_with_optimization(N):
                             And(match_assigned, home_is_first_vars[p, w])
                         )
 
-        encode_exact_count(solver, team_home_indicators, home_count_vars[t],
-                           N - 1, f'home_t{t}')
-        encode_exact_count(solver, team_away_indicators, away_count_vars[t],
-                           N - 1, f'away_t{t}')
+        encode_exact_count(solver, team_home_indicators, home_count_vars[t], N - 1, f'home_t{t}')
+        encode_exact_count(solver, team_away_indicators, away_count_vars[t], N - 1, f'away_t{t}')
 
     # Compute imbalance
     diff_vars = {}
@@ -212,3 +197,52 @@ def solve_with_optimization(N):
         solver.pop()
 
     return best_solution
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Round-robin scheduling using SAT encodings."
+    )
+
+    parser.add_argument(
+        "-n", "--n",
+        type=int,
+        required=True,
+        help="Number of teams (must be even)."
+    )
+
+    parser.add_argument(
+        "-m", "--mode",
+        type=str,
+        choices=["satisfy", "optimize"],
+        required=True,
+        help="Execution mode: 'sat' for satisfaction, 'opt' for optimization."
+    )
+
+    args = parser.parse_args()
+
+    N = args.n
+    mode = args.mode
+
+    # Validate input
+    if N <= 0:
+        print("Error: N must be positive.")
+        sys.exit(1)
+
+    if N % 2 != 0:
+        print("Error: Number of teams must be even.")
+        sys.exit(1)
+
+    print(f"Running with N = {N}, mode = {mode}")
+
+    if mode == "satisfy":
+        satisfy(N)
+    elif mode == "optimize":
+        optimize(N)
+    else:
+        # This should never happen due to argparse choices
+        print("Invalid mode selected.")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

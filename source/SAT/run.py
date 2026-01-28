@@ -1,204 +1,203 @@
-#!/usr/bin/env python3
-"""
-Sports Scheduling Problem Solver
-
-This script solves the sports scheduling problem using SAT encoding.
-It supports both decision (satisfy) and optimization modes.
-"""
-# TODO: handle timeout here when running single instance
-import argparse
-import time
-import sys
+import subprocess
+import json
 import os
-from solve import satisfy, solve_with_optimization
-from utils import format_json, save_json, calculate_params
+import time
+import math
+import argparse
+import re
+from pathlib import Path
+
+
+def run_z3_model(script_path, mode, N, timeout_sec=300):
+    cmd = [
+        "python",
+        str(script_path),
+        "-n", str(N),
+        "--mode", mode
+    ]
+
+    start_time = time.time()
+
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_sec
+        )
+
+        timed_out = False
+
+    except subprocess.TimeoutExpired as e:
+        end_time = time.time()
+        runtime_floor = timeout_sec
+
+        return runtime_floor, False, None, []
+
+    end_time = time.time()
+
+    actual_runtime = end_time - start_time
+    runtime_floor = math.floor(actual_runtime)
+
+    stdout = result.stdout
+    print(stdout)
+
+    # --------------------------------------------------
+    # Objective extraction (only for optimization)
+    # --------------------------------------------------
+    obj = None
+    obj_match = re.search(r"Total Imbalance:\s*(\d+)", stdout)
+    if obj_match:
+        obj = int(obj_match.group(1))
+
+    # --------------------------------------------------
+    # Solution extraction
+    # --------------------------------------------------
+    sol = parse_solution_matrix(stdout)
+
+    # --------------------------------------------------
+    # Optimality detection
+    # --------------------------------------------------
+    optimal = True
+    if not sol or (obj and obj > N):
+        optimal = False
+        runtime_floor = timeout_sec
+
+    return runtime_floor, optimal, obj, sol
+
+
+def parse_solution_matrix(stdout):
+    week_blocks = re.findall(
+        r"Week\s+\d+:(.*?)(?=Week\s+\d+:|Total Imbalance:|----------|$)",
+        stdout,
+        re.DOTALL
+    )
+
+    if not week_blocks:
+        return None
+
+    weeks = []
+
+    for block in week_blocks:
+        matches = re.findall(r"(\d+)\s+vs\s+(\d+)", block)
+        week_matches = [[int(a), int(b)] for a, b in matches]
+
+        if week_matches:
+            weeks.append(week_matches)
+
+    if not weeks:
+        return None
+
+    num_weeks = len(weeks)
+    num_periods = len(weeks[0])
+
+    matrix = []
+
+    for p in range(num_periods):
+        row = []
+        for w in range(num_weeks):
+            if p < len(weeks[w]):
+                row.append(weeks[w][p])
+            else:
+                return None
+        matrix.append(row)
+
+    # Convert team numbering from 0-based to 1-based
+    for p in range(num_periods):
+        for w in range(num_weeks):
+            for t in range(2):
+                matrix[p][w][t] += 1
+
+    return matrix
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Solve the sports scheduling problem for N teams',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python run.py -n 6 --mode satisfy
-  python run.py -n 8 --mode optimize
-  python run.py -n 10 --mode both --savedir results
-        """
+        description="Run Z3 scheduling script and produce grouped JSON (subprocess style)."
     )
 
     parser.add_argument(
-        '-n', '--teams',
+        "--N",
         type=int,
         required=True,
-        help='Number of teams (must be even)'
+        help="Number of teams"
     )
 
     parser.add_argument(
-        '--mode',
-        type=str,
-        choices=['satisfy', 'optimize', 'both'],
-        default='both',
-        help='Solving mode: satisfy (decision), optimize (with balance), or both (default: both)'
+        "--timeout",
+        type=int,
+        default=300,
+        help="Timeout in seconds (default 300)"
     )
 
     parser.add_argument(
-        '--savedir',
+        "--outdir",
         type=str,
-        default='.',
-        help='Directory to save output JSON file (default: current directory)'
+        default="res",
+        help="Directory where JSON file will be saved"
+    )
+
+    parser.add_argument(
+        "-m", "--mode",
+        type=str,
+        choices=["satisfy", "optimize", "both"],
+        required=True,
+        help="Execution mode: 'sat' for satisfaction, 'opt' for optimization."
     )
 
     args = parser.parse_args()
 
-    # Validate input
-    if args.teams % 2 != 0:
-        print(f"Error: Number of teams must be even, got {args.teams}")
-        sys.exit(1)
+    script_path = Path("source/SAT/solve.py")
 
-    if args.teams < 4:
-        print(f"Error: Number of teams must be at least 4, got {args.teams}")
-        sys.exit(1)
+    if not script_path.exists():
+        print("Invalid script path")
+        return
 
-    N = args.teams
+    if args.N % 2 != 0:
+        print("N must be even")
+        return
 
-    # Create save directory if it doesn't exist
-    if args.savedir != '.':
-        os.makedirs(args.savedir, exist_ok=True)
+    results = {}
 
-    # Build output file path
-    output_file = os.path.join(args.savedir, f"{N}.json")
+    # --------------------------------------------------
+    # Run based on mode
+    # --------------------------------------------------
+    modes_to_run = []
 
-    # Store all results
-    all_results = {}
-
-    print(f"\n{'=' * 60}")
-    print(f"Sports Scheduling Problem - N={N} teams")
-    print(f"{'=' * 60}\n")
-
-    # Calculate parameters
-    T, S, W, P, M = calculate_params(N)
-
-    # Run SAT Decision Version
-    if args.mode in ['satisfy', 'both']:
-        print(f"\n{'=' * 60}")
-        print("Running SAT Decision Version (Satisfy)")
-        print(f"{'=' * 60}\n")
-
-        start_time = time.time()
-        try:
-            solution = satisfy(N)
-            runtime = time.time() - start_time
-
-            if solution is not None:
-                # Get match pairs for formatting
-                from utils import generate_rb_and_flattened
-                _, match_pairs = generate_rb_and_flattened(N, W, P, S)
-
-                json_result = format_json(
-                    N=N,
-                    P=P,
-                    W=W,
-                    match_pairs=match_pairs,
-                    extracted_solution=solution,
-                    runtime=runtime,
-                    approach_name="Z3_Decision",
-                    is_optimal=True,
-                    objective_value=None
-                )
-                all_results.update(json_result)
-                print(f"\nRuntime: {runtime:.2f} seconds")
-            else:
-                runtime = time.time() - start_time
-                # UNSAT case
-                json_result = {
-                    "Z3_Decision": {
-                        "time": 300,
-                        "optimal": False,
-                        "obj": None,
-                        "sol": []
-                    }
-                }
-                all_results.update(json_result)
-                print(f"\nNo solution found (UNSAT)")
-
-        except Exception as e:
-            print(f"Error during SAT decision solving: {e}")
-            json_result = {
-                "Z3_Decision": {
-                    "time": 300,
-                    "optimal": False,
-                    "obj": None,
-                    "sol": []
-                }
-            }
-            all_results.update(json_result)
-
-    # Run SAT Optimization Version
-    if args.mode in ['optimize', 'both']:
-        print(f"\n{'=' * 60}")
-        print("Running SAT Optimization Version (Home/Away Balance)")
-        print(f"{'=' * 60}\n")
-
-        start_time = time.time()
-        try:
-            solution = solve_with_optimization(N)
-            runtime = time.time() - start_time
-
-            if solution is not None:
-                # Get match pairs for formatting
-                from utils import generate_rb_and_flattened
-                _, match_pairs = generate_rb_and_flattened(N, W, P, S)
-
-                objective_value = solution.get('imbalance')
-
-                json_result = format_json(
-                    N=N,
-                    P=P,
-                    W=W,
-                    match_pairs=match_pairs,
-                    extracted_solution=solution,
-                    runtime=runtime,
-                    approach_name="Z3_Optimization",
-                    is_optimal=True,
-                    objective_value=objective_value
-                )
-                all_results.update(json_result)
-                print(f"\nRuntime: {runtime:.2f} seconds")
-                print(f"Objective (Total Imbalance): {objective_value}")
-            else:
-                runtime = time.time() - start_time
-                # UNSAT case
-                json_result = {
-                    "Z3_Optimization": {
-                        "time": 300,
-                        "optimal": False,
-                        "obj": None,
-                        "sol": []
-                    }
-                }
-                all_results.update(json_result)
-                print(f"\nNo solution found (UNSAT)")
-
-        except Exception as e:
-            print(f"Error during SAT optimization solving: {e}")
-            json_result = {
-                "Z3_Optimization": {
-                    "time": 300,
-                    "optimal": False,
-                    "obj": None,
-                    "sol": []
-                }
-            }
-            all_results.update(json_result)
-
-    # Save results to JSON
-    if all_results:
-        save_json(all_results, output_file)
-        print(f"\n{'=' * 60}")
-        print(f"All results saved to {output_file}")
-        print(f"{'=' * 60}\n")
+    if args.mode == "both":
+        modes_to_run = ["satisfy", "optimize"]
     else:
-        print("\nNo results to save.")
+        modes_to_run = [args.mode]
+
+    for mode in modes_to_run:
+        approach_name = f"Z3-{mode}"
+        print(f"Running {approach_name}...")
+
+        runtime, optimal, obj, sol = run_z3_model(
+            script_path=script_path,
+            mode=mode,
+            N=args.N,
+            timeout_sec=args.timeout
+        )
+
+        results[approach_name] = {
+            "time": runtime,
+            "optimal": optimal,
+            "obj": obj,
+            "sol": sol if sol else []
+        }
+
+    # --------------------------------------------------
+    # Save JSON
+    # --------------------------------------------------
+    os.makedirs(args.outdir, exist_ok=True)
+    output_path = os.path.join(args.outdir, f"{args.N}.json")
+
+    with open(output_path, "w") as f:
+        json.dump(results, f, indent=4)
+
+    print(f"\nSaved grouped results to {output_path}")
 
 
 if __name__ == "__main__":
