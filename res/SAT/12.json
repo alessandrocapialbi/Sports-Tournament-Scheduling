@@ -1,5 +1,5 @@
 {
-    "Z3_Decision": {
+    "Z3-satisfy": {
         "time": 1,
         "optimal": true,
         "obj": null,

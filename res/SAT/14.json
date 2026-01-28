@@ -1,6 +1,6 @@
 {
-    "Z3_Decision": {
-        "time": 2,
+    "Z3-satisfy": {
+        "time": 3,
         "optimal": true,
         "obj": null,
         "sol": [
