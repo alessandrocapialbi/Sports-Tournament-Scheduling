@@ -23,5 +23,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
 COPY ./source .
+COPY solution_checker.py .
 
-CMD ["/bin/bash"]
+CMD ["sh"]
