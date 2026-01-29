@@ -67,7 +67,7 @@ python source/CP/run.py --model source/CP/<model_file>.mzn --solver <solver> --N
 
 **Example:**
 ```bash
-python source/CP/run.py --model source/CP/model1.mzn --solver gecode --N 8 --timeout 300
+python source/CP/run.py --model source/CP/opt_baseline.mzn --solver gecode --N 8 --timeout 300
 ```
 
 #### Run all CP models in a directory:
@@ -88,7 +88,7 @@ python source/CP/run.py --dir source/CP --N <num_teams> [--timeout <seconds>] [-
 python source/CP/run.py --dir source/CP --N 10 --timeout 300 --outdir res/CP
 ```
 
-### SAT/SMT (Z3)
+### SAT (Z3)
 
 #### Run the Z3 solver:
 
@@ -205,7 +205,7 @@ Each JSON file contains results grouped by approach:
 
 ```json
 {
-    "approach-name": {
+    "file_name-solver": {
         "time": <runtime_in_seconds>,
         "optimal": <true_or_false>,
         "obj": <total_imbalance>,
@@ -226,11 +226,11 @@ Each JSON file contains results grouped by approach:
 
 ### Example Output
 
-For CP with gecode solver (N=8):
+For `opt_baseline.mzn` CP with `gecode` and `chuffed` solver (N=8):
 
 ```json
 {
-    "model1-gecode": {
+    "opt_baseline-gecode": {
         "time": 45,
         "optimal": true,
         "obj": 6,
@@ -240,7 +240,7 @@ For CP with gecode solver (N=8):
             ...
         ]
     },
-    "model1-chuffed": {
+    "opt_baseline-chuffed": {
         "time": 52,
         "optimal": true,
         "obj": 8,
@@ -252,7 +252,7 @@ For CP with gecode solver (N=8):
 ## Solvers Used
 
 - **CP**: MiniZinc with Gecode, Chuffed, and OR-Tools CP-SAT
-- **SAT/SMT**: Z3 SMT solver
+- **SAT**: Z3 solver
 - **MIP**: CBC (COIN-OR Branch and Cut) MILP solver
 
 All solvers are free and open-source, ensuring full reproducibility.
@@ -265,17 +265,3 @@ All solvers are free and open-source, ensuring full reproducibility.
 - Runtime is measured as the floor of actual execution time
 - If a solution is non-optimal (objective > N or no solution found), runtime is set to the timeout value
 - For SAT, optimization mode is only run for smaller instances (N ≤ 10) due to computational complexity
-
-## Troubleshooting
-
-If you encounter issues:
-
-1. Ensure you're running commands from the `/cdmo` directory
-2. Verify the Docker container has sufficient resources
-3. Check that input parameters are valid (N must be even and ≥ 6)
-4. Increase timeout for larger instances if needed
-5. Check solver output in the console for detailed error messages
-
-## License
-
-This project uses only free and open-source software to ensure reproducibility across different environments.
