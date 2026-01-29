@@ -216,7 +216,7 @@ The output JSON file will be created at: <outdir>/<n>.json
     print(f"Time: {result['time']} seconds")
     print(f"Optimal: {result['optimal']}")
     print(f"Objective (Total Imbalance): {result['obj']}")
-    print(f"Solution: {'Found' if result['sol'] is not None else 'Not found'}")
+    print(f"Solution: {'Found' if len(result['sol']) > 0 else 'Not found'}")
     print(f"\nResults saved to: {output_file}")
     print("=" * 80 + "\n")
 

@@ -1,27 +1,25 @@
 from pulp import *
+import sys
 
-
-def optimize(n):
+def optimize(n, gap=0.01):
     # Validate input
     if n % 2 != 0:
         raise ValueError("Number of teams must be even")
     if n < 6:
         raise ValueError("Number of teams must be at least 6")
 
-    teams = range(n)  # T = 0..N-1
-    weeks = range(n - 1)  # W = 0..N-2
-    periods = range(n // 2)  # P = 0..N div 2 - 1
-    slots = range(2)  # S = 0..1 (0=Home, 1=Away)
-    total_matches = range((n - 1) * (n // 2))  # M = 0..(N-1)*(N div 2)-1
+    W = n - 1   # total weeks
+    P = n // 2  # total periods
+    M = P * W   # total matches
 
     # Generate Round Robin schedule using circle method
     # rb[p][w][s] gives the team for period p, week w, slot s
     rb = {}
-    for p in periods:
+    for p in range(P):
         rb[p] = {}
-        for w in weeks:
+        for w in range(W):
             rb[p][w] = {}
-            for s in slots:
+            for s in range(2):
                 if s == 0:  # Home team
                     if p == 0:
                         rb[p][w][s] = n - 1 if w % 2 == 0 else w
@@ -36,237 +34,184 @@ def optimize(n):
     # Flatten to list of matches: matches[m][0/1]
     matches = {}
     match_id = 0
-    for w in weeks:
-        for p in periods:
+    for w in range(W):
+        for p in range(P):
             matches[match_id] = {}
             matches[match_id][0] = rb[p][w][0]
             matches[match_id][1] = rb[p][w][1]
             match_id += 1
 
-    # Create the optimization problem
-    prob = LpProblem("Single_Round_Robin_Scheduler_Optimization", LpMinimize)
+    # Create the model
+    model = LpProblem("RoundRobinScheduling", LpMinimize)
 
     # Decision Variables
-    # matches_idx[p][w] = the match ID assigned to period p in week w
-    matches_idx = LpVariable.dicts(
-        "MatchIdx",
-        indices=(periods, weeks),
-        lowBound=0,
-        upBound=len(total_matches) - 1,
-        cat="Integer"
-    )
+    # matches_one_hot[m, p, w] = 1 if match m is scheduled in period p of week w
+    matches_one_hot = LpVariable.dicts("matches_oh",
+                              ((m, p, w) for m in range(M) for p in range(P) for w in range(W)),
+                              cat='Binary')
 
-    # which_is_home[p][w] = 0 if first team in pair is home, 1 if second team is home
-    which_is_home = LpVariable.dicts(
-        "WhichIsHome",
-        indices=(periods, weeks),
-        cat="Binary"
-    )
+    # first_is_home[m] = 1 if in match m the first team is home (0 if second team is home)
+    first_is_home = LpVariable.dicts("first_is_home", range(M), cat='Binary')
 
-    # Cha[t][s] = count of how many times team t plays in slot s (0=home, 1=away)
-    Cha = LpVariable.dicts(
-        "SlotCount",
-        indices=(teams, slots),
-        lowBound=0,
-        upBound=n - 1,
-        cat="Integer"
-    )
+    # Linearization: y[m,p,w] = matches_one_hot[m,p,w] * first_is_home[m]
+    y = LpVariable.dicts("y",
+                              ((m, p, w) for m in range(M) for p in range(P) for w in range(W)),
+                              cat='Binary')
 
-    # Objective variable: total imbalance
-    imbalance = LpVariable("Imbalance", lowBound=n, cat="Integer")
+    # Home and away counts for each team
+    home_count = LpVariable.dicts("home", range(n), lowBound=0, upBound=W, cat='Integer')
+    away_count = LpVariable.dicts("away", range(n), lowBound=0, upBound=W, cat='Integer')
 
-    # Auxiliary variables for linking matches to teams and home/away
-    # is_match[p][w][m] = 1 if matches_idx[p][w] == m (one-hot encoding of match m in period p and week w)
-    is_match = LpVariable.dicts(
-        "IsMatch",
-        indices=(periods, weeks, total_matches),
-        cat="Binary"
-    )
+    # Auxiliary variables for absolute differences
+    diff = LpVariable.dicts("diff", range(n), lowBound=0, cat='Integer')
 
-    # team_in_period[t][p][w] = 1 if team t plays in period p in week w
-    team_in_period = LpVariable.dicts(
-        "TeamInPeriod",
-        indices=(teams, periods, weeks),
-        cat="Binary"
-    )
+    # Objective variable
+    imbalance = LpVariable("imbalance", lowBound=0, cat='Integer')
 
-    # team_plays_home[t][p][w] = 1 if team t plays at home in period p, week w
-    team_plays_home = LpVariable.dicts(
-        "TeamPlaysHome",
-        indices=(teams, periods, weeks),
-        cat="Binary"
-    )
 
-    # team_plays_away[t][p][w] = 1 if team t plays away in period p, week w
-    team_plays_away = LpVariable.dicts(
-        "TeamPlaysAway",
-        indices=(teams, periods, weeks),
-        cat="Binary"
-    )
-
-    # Auxiliary variables for products: is_match[p][w][m] * (1 - which_is_home[p][w])
-    match_and_home_first = LpVariable.dicts(
-        "MatchAndHomeFirst",
-        indices=(periods, weeks, total_matches),
-        cat="Binary"
-    )
-
-    # Auxiliary variables for products: is_match[p][w][m] * which_is_home[p][w]
-    match_and_home_second = LpVariable.dicts(
-        "MatchAndHomeSecond",
-        indices=(periods, weeks, total_matches),
-        cat="Binary"
-    )
+    # Linearization constraints: y[m,p,w] = matches_one_hot[m,p,w] * first_is_home[m]   (if y[m,p,w]=1 then matches m is played with first team home)
+    for m in range(M):
+        for p in range(P):
+            for w in range(W):
+                model += y[m, p, w] <= matches_one_hot[m, p, w], f"lin1_{m}_{p}_{w}"
+                model += y[m, p, w] <= first_is_home[m], f"lin2_{m}_{p}_{w}"
+                model += y[m, p, w] >= matches_one_hot[m, p, w] + first_is_home[m] - 1, f"lin3_{m}_{p}_{w}"
 
     # Constraints
 
-    # 1. SYMMETRY BREAKING: matches_idx[0][0] = 0
-    prob += matches_idx[0][0] == 0
+    # 1. Each match is played exactly once
+    for m in range(M):
+        model += lpSum(matches_one_hot[m, p, w] for p in range(P) for w in range(W)) == 1, f"match_{m}_once"
 
-    # 2. CHANNELING CONSTRAINT: Link is_match to matches_idx
-    for p in periods:
-        for w in weeks:
-            # Exactly one match is selected
-            prob += lpSum([is_match[p][w][m] for m in total_matches]) == 1
+    # 2. Each period-week slot has exactly one match
+    for p in range(P):
+        for w in range(W):
+            model += lpSum(matches_one_hot[m, p, w] for m in range(M)) == 1, f"slot_{p}_{w}_filled"
 
-            # Link to the integer value
-            prob += matches_idx[p][w] == lpSum([m * is_match[p][w][m] for m in total_matches])
+    # 3. Matches from week w must be scheduled in week w
+    for w in range(W):
+        week_matches = list(range(w * P, (w + 1) * P))
+        for p in range(P):
+            model += lpSum(matches_one_hot[m, p, w] for m in week_matches) == 1, f"week_{w}_integrity_{p}"
 
-    # 3. Validity: each match appears exactly once (alldifferent)
-    for m in total_matches:
-        prob += lpSum([is_match[p][w][m] for p in periods for w in weeks]) == 1
+    # 4. Each team plays at most 2 times in each period across all weeks
+    for p in range(P):
+        for t in range(n):
+            appearances = []
+            for w in range(W):
+                for m in range(M):
+                    team1, team2 = matches[m][0], matches[m][1]
+                    if team1 == t or team2 == t:
+                        appearances.append(matches_one_hot[m, p, w])
 
-    # 4. Intuition: every p (N / 2) matches generated from round robin method, a week is formed
-    for w in weeks:
-        for p in periods:
-            min_match = w * (n // 2)
-            max_match = (w + 1) * (n // 2) - 1
-            # Only matches in valid range can be selected
-            prob += lpSum([
-                is_match[p][w][m]
-                for m in total_matches
-                if min_match <= m <= max_match
-            ]) == 1
+            if appearances:
+                model += lpSum(appearances) <= 2, f"team_{t}_period_{p}_limit"
 
-    # 5. CHANNELING CONSTRAINT: link team_in_period - team t plays in period p, week w if assigned match contains t
-    for t in teams:
-        for p in periods:
-            for w in weeks:
-                prob += team_in_period[t][p][w] == lpSum([
-                    is_match[p][w][m]
-                    for m in total_matches
-                    if matches[m][0] == t or matches[m][1] == t
-                ])
+    # 5. Calculate home counts
+    for t in range(n):
+        home_games = []
+        for m in range(M):
+            team1, team2 = matches[m][0], matches[m][1]
+            for p in range(P):
+                for w in range(W):
+                    if team1 == t:
+                        # Team t is home when first_is_home[m] = 1, so use y[m,p,w]
+                        home_games.append(y[m, p, w])
+                    elif team2 == t:
+                        # Team t is home when first_is_home[m] = 0, so use matches_one_hot[m,p,w] - y[m,p,w]
+                        home_games.append(matches_one_hot[m, p, w] - y[m, p, w])
 
-    # 6. Each team plays at most twice in any period
-    for t in teams:
-        for p in periods:
-            prob += lpSum([team_in_period[t][p][w] for w in weeks]) <= 2
+        model += home_count[t] == lpSum(home_games), f"home_count_{t}"
 
-    # 7. CHANNELING CONSTRAINT: link match_and_home_first and match_and_home_second
-    for p in periods:
-        for w in weeks:
-            for m in total_matches:
-                # match_and_home_first[p][w][m] = is_match[p][w][m] AND (1 - which_is_home[p][w])
-                prob += match_and_home_first[p][w][m] <= is_match[p][w][m]
-                prob += match_and_home_first[p][w][m] <= 1 - which_is_home[p][w]
-                prob += match_and_home_first[p][w][m] >= is_match[p][w][m] + (1 - which_is_home[p][w]) - 1
+    # 6. Calculate away counts
+    for t in range(n):
+        away_games = []
+        for m in range(M):
+            team1, team2 = matches[m][0], matches[m][1]
+            for p in range(P):
+                for w in range(W):
+                    if team1 == t:
+                        # Team t is away when first_is_home[m] = 0, so use matches_one_hot[m,p,w] - y[m,p,w]
+                        away_games.append(matches_one_hot[m, p, w] - y[m, p, w])
+                    elif team2 == t:
+                        # Team t is away when first_is_home[m] = 1, so use y[m,p,w]
+                        away_games.append(y[m, p, w])
 
-                # match_and_home_second[p][w][m] = is_match[p][w][m] AND (1 - home_is_first[p][w])
-                prob += match_and_home_second[p][w][m] <= is_match[p][w][m]
-                prob += match_and_home_second[p][w][m] <= which_is_home[p][w]
-                prob += match_and_home_second[p][w][m] >= is_match[p][w][m] + which_is_home[p][w] - 1
+        model += away_count[t] == lpSum(away_games), f"away_count_{t}"
 
-    # 8. CHANNELING CONSTRAINT: link home/away assignments
-    for t in teams:
-        for p in periods:
-            for w in weeks:
-                # Team t plays home if:
-                # - match has t as first team AND which_is_home == 1, OR
-                # - match has t as second team AND which_is_home == 0
-                prob += team_plays_home[t][p][w] == lpSum([
-                    match_and_home_first[p][w][m]
-                    for m in total_matches
-                    if matches[m][0] == t
-                ]) + lpSum([
-                    match_and_home_second[p][w][m]
-                    for m in total_matches
-                    if matches[m][1] == t
-                ])
+    # 7. Each team plays exactly W games (home + away = W)
+    for t in range(n):
+        model += home_count[t] + away_count[t] == W, f"team_{t}_total_games"
 
-                # Team t plays away if:
-                # - match has t as first team AND which_is_home == 0, OR
-                # - match has t as second team AND which_is_home == 1
-                prob += team_plays_away[t][p][w] == lpSum([
-                    match_and_home_second[p][w][m]
-                    for m in total_matches
-                    if matches[m][0] == t
-                ]) + lpSum([
-                    match_and_home_first[p][w][m]
-                    for m in total_matches
-                    if matches[m][1] == t
-                ])
+    # 8. Calculate absolute differences
+    for t in range(n):
+        model += diff[t] >= home_count[t] - away_count[t], f"diff_{t}_pos"
+        model += diff[t] >= away_count[t] - home_count[t], f"diff_{t}_neg"
 
-    # 9. Count total home and away games for each team
-    for t in teams:
-        prob += Cha[t][0] == lpSum([team_plays_home[t][p][w] for p in periods for w in weeks])
-        prob += Cha[t][1] == lpSum([team_plays_away[t][p][w] for p in periods for w in weeks])
+    # 9. Total imbalance
+    model += imbalance == lpSum(diff[t] for t in range(n)), "total_imbalance"
 
-    # 10. Define imbalance as sum of absolute differences
-    abs_diff = LpVariable.dicts(
-        "AbsDiff",
-        indices=teams,
-        lowBound=0,
-        cat="Integer"
-    )
+    # 10. Minimum imbalance
+    model += imbalance >= n, "min_imbalance"
 
-    for t in teams:
-        prob += abs_diff[t] >= Cha[t][0] - Cha[t][1]
-        prob += abs_diff[t] >= Cha[t][1] - Cha[t][0]
+    # SYMMETRY BREAKING: First match (0) goes to period 0, week 0
+    model += matches_one_hot[0, 0, 0] == 1, "symmetry_first_match"
 
-    prob += imbalance == lpSum([abs_diff[t] for t in teams])
+    # SYMMETRY BREAKING: lex order between periods
+    for p in range(P - 1):
+        model += (lpSum(m * matches_one_hot[m, p, w] for m in range(M) for w in range(W)) <=
+                  lpSum(m * matches_one_hot[m, p + 1, w] for m in range(M) for w in range(W)))
 
-    # Objective: minimize imbalance
-    prob += imbalance
+    # Objective: Minimize total imbalance
+    model += imbalance, "objective"
 
     # Solve
-    prob.solve(PULP_CBC_CMD(msg=False))
+    solver = PULP_CBC_CMD( msg=False, gapRel=gap, threads=1)
+    model.solve(solver)
 
     # Extract results
     result = {
-        'status': LpStatus[prob.status],
+        'status': LpStatus[model.status],
         'schedule': {},
         'imbalance': None,
         'home_away_counts': {}
     }
 
-    if LpStatus[prob.status] == "Optimal" or LpStatus[prob.status] == "Not Solved":
-        # Extract schedule
-        for p in periods:
-            for w in weeks:
-                match_id = int(value(matches_idx[p][w]))
-                is_first_home = int(value(not which_is_home[p][w]))
+    if LpStatus[model.status] == "Optimal" or LpStatus[model.status] == "Not Solved":
+        schedule = {}
+        for w in range(W):
+            schedule[w] = {}
+            for p in range(P):
+                for m in range(M):
+                    if value(matches_one_hot[m, p, w]) and value(matches_one_hot[m, p, w]) > 0.5:
+                        team1, team2 = matches[m][0], matches[m][1]
+                        h_val = value(first_is_home[m])
+                        if h_val and h_val > 0.5:
+                            home, away = team1, team2
+                        else:
+                            home, away = team2, team1
+                        schedule[w][p] = (home, away)
+        result['schedule'] = schedule
 
-                if is_first_home == 1:
-                    home_team = matches[match_id][0]
-                    away_team = matches[match_id][1]
-                else:
-                    home_team = matches[match_id][1]
-                    away_team = matches[match_id][0]
+        # Get home/away counts
+        home_away_balance = {}
+        for t in range(n):
+            h_val = value(home_count[t])
+            a_val = value(away_count[t])
+            d_val = value(diff[t])
+            home_away_balance[t] = {
+                'home': int(round(h_val)) if h_val else 0,
+                'away': int(round(a_val)) if a_val else 0,
+                'diff': int(round(d_val)) if d_val else 0
+            }
+            result['home_away_counts'][t] = (h_val, a_val)
 
-                result['schedule'][(p, w)] = (home_team, away_team)
+        imb_val = value(imbalance)
+        total_imbalance = int(round(imb_val)) if imb_val else 0
 
-        # Extract home/away counts
-        for t in teams:
-            home_count = int(value(Cha[t][0]))
-            away_count = int(value(Cha[t][1]))
-            result['home_away_counts'][t] = (home_count, away_count)
-
-        # Extract imbalance
-        result['imbalance'] = int(value(imbalance))
+        result['imbalance'] = total_imbalance
 
     return result
-
 
 def print_schedule(result, n):
     if result['status'] not in ["Optimal", "Not Solved"]:
@@ -285,7 +230,7 @@ def print_schedule(result, n):
         print(f"Week {w + 1}:\n")
 
         for p in periods:
-            home_team, away_team = result['schedule'][(p, w)]
+            home_team, away_team = result['schedule'][w][p]
             print(f"  Period {p + 1}: {home_team} vs {away_team}")
 
         print()
@@ -298,8 +243,8 @@ def print_schedule(result, n):
         home_count, away_count = result['home_away_counts'][t]
         diff = abs(home_count - away_count)
         print(
-            f"Team {t:2d}: Home={home_count:2d}, "
-            f"Away={away_count:2d}, Difference={diff}"
+            f"Team {t:2d}: Home={int(home_count):2d}, "
+            f"Away={int(away_count):2d}, Difference={int(diff)}"
         )
 
     print("\n" + "=" * 80)
