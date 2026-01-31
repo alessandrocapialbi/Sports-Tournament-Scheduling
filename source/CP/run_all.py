@@ -25,9 +25,7 @@ def main():
 
         result = subprocess.run(
             cmd,
-            cmdstdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            check=True
         )
 
         if result.returncode != 0:
