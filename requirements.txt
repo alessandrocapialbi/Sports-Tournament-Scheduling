@@ -1,3 +1,4 @@
 PuLP
 z3-solver
 ortools
+highspy

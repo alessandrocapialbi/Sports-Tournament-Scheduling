@@ -1,11 +1,28 @@
 import argparse
 import subprocess
 import re
+import os
 import sys
 import json
 import time as tm
 from pathlib import Path
 
+def previous_unsolved(outdir, N, solver):
+    prev_n = N - 2
+    prev_file = os.path.join(outdir, f"{prev_n}.json")
+
+    if not os.path.exists(prev_file):
+        return False
+
+    with open(prev_file, "r") as f:
+        data = json.load(f)
+
+    key = f"MIP-{solver}"
+
+    if key not in data:
+        return False
+
+    return data[key]["sol"] == []
 
 def parse_solution_matrix(stdout):
     week_blocks = re.findall(
@@ -59,8 +76,7 @@ def parse_solution_matrix(stdout):
 
     return matrix
 
-
-def run_scheduler(n, timeout=300):
+def run_scheduler(n, solver, timeout=300):
 
     result = {
         "time": timeout,
@@ -73,7 +89,12 @@ def run_scheduler(n, timeout=300):
 
     try:
         process = subprocess.run(
-            [sys.executable, "source/MIP/model.py", str(n)],
+            [
+                sys.executable,
+                "source/MIP/model.py",
+                "--N", str(n),                     # positional arg: teams
+                "--solver", solver,
+            ],
             capture_output=True,
             text=True,
             timeout=timeout
@@ -85,9 +106,8 @@ def run_scheduler(n, timeout=300):
             print(f"Warning: Solver failed with return code {process.returncode}")
             if process.stderr:
                 print("STDERR:", process.stderr[:500])
-            return result  # time already = timeout, optimal=False
+            return result
 
-        # Print solver output so schedule is visible
         print(process.stdout)
 
         imbalance = None
@@ -101,13 +121,13 @@ def run_scheduler(n, timeout=300):
             print("Failed to extract solution.")
             return result
 
-        # Competition optimality rule
-        is_optimal = imbalance and imbalance <= n
+        # Competition optimality rule: imbalance <= N
+        is_optimal = imbalance is not None and imbalance <= n
 
         if is_optimal:
             result["time"] = elapsed_time
         else:
-            result["time"] = timeout  # required rule
+            result["time"] = timeout
 
         result["optimal"] = is_optimal
         result["obj"] = imbalance
@@ -134,93 +154,117 @@ def run_scheduler(n, timeout=300):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Run the round-robin scheduler and output results in JSON format.',
+        description="Run the MIP round-robin scheduler and output results as JSON.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s -n 12 -o results/MIP -t 300
-  %(prog)s -n 8 -o results/MIP -t 60
-  %(prog)s --teams 10 --outdir results/CP --timeout 300
-
-The output JSON file will be created at: <outdir>/<n>.json
+  %(prog)s --N 12 --solver cbc  --outdir results/MIP --timeout 300
+  %(prog)s --N 8  --solver highs --outdir results/MIP --timeout 60
+  %(prog)s --N 14 --solver highs --outdir results/MIP --no-skip-non-solvable
         """
     )
 
     parser.add_argument(
-        '-n', '--teams',
-        type=int,
-        required=True,
-        metavar='N',
-        help='Number of teams (must be even, minimum 4)'
+        "--N", type=int, required=True, metavar="N",
+        help="Number of teams (must be even, >= 6)"
     )
-
     parser.add_argument(
-        '-o', '--outdir',
-        type=str,
-        required=True,
-        metavar='DIR',
-        help='Output directory for results (e.g., results/MIP)'
+        "--solver", type=str, required=True,
+        choices=["cbc", "highs"],
+        help="MIP solver backend"
     )
-
     parser.add_argument(
-        '-t', '--timeout',
-        type=int,
-        default=300,
-        metavar='SECONDS',
-        help='Timeout in seconds (default: 300)'
+        "--outdir", type=str, default="res", metavar="DIR",
+        help="Output directory for JSON results (default: res)"
     )
+    parser.add_argument(
+        "--timeout", type=int, default=300, metavar="SECONDS",
+        help="Timeout in seconds (default: 300)"
+    )
+    parser.add_argument(
+        "--no-skip-non-solvable",
+        dest="skip_non_solvable",
+        action="store_false",
+        help="Disable skipping when N-2 had an empty solution"
+    )
+    parser.set_defaults(skip_non_solvable=True)
 
     args = parser.parse_args()
 
-    # Validate input
-    if args.teams < 6:
-        print(f"Error: Number of teams must be at least 6 (got {args.teams})")
+    # validation
+    if args.N < 6:
+        print(f"Error: Number of teams must be at least 6 (got {args.N})")
         sys.exit(1)
-    if args.teams % 2 != 0:
-        print(f"Error: Number of teams must be even (got {args.teams})")
+    if args.N % 2 != 0:
+        print(f"Error: Number of teams must be even (got {args.N})")
         sys.exit(1)
     if args.timeout <= 0:
         print(f"Error: Timeout must be positive (got {args.timeout})")
         sys.exit(1)
 
-    # Create output directory if it doesn't exist
-    outdir = Path(args.outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
+    script_path = Path("source/MIP/model.py")
+    if not script_path.exists():
+        print(f"Error: model.py not found at {script_path}")
+        sys.exit(1)
 
-    # Output file path
-    output_file = outdir / f"{args.teams}.json"
+    # output setup
+    os.makedirs(args.outdir, exist_ok=True)
+    output_file = os.path.join(args.outdir, f"{args.N}.json")
+    key = f"MIP-{args.solver}"
 
-    print(f"\nRunning scheduler for {args.teams} teams...")
+    # skip check
+    if args.skip_non_solvable and args.N > 6:
+        if previous_unsolved(args.outdir, args.N, args.solver):
+            print(f"Skipping {key} at N={args.N} (unsolved at N={args.N - 2})")
+            result = {
+                "time": args.timeout,
+                "optimal": False,
+                "obj": None,
+                "sol": []
+            }
+            # Merge into existing file if present, otherwise create it
+            existing = {}
+            if os.path.exists(output_file):
+                with open(output_file, "r") as f:
+                    existing = json.load(f)
+            existing[key] = result
+
+            with open(output_file, "w") as f:
+                json.dump(existing, f, indent=2)
+
+            print(f"Skipped result saved to: {output_file}")
+            sys.exit(0)
+
+    # run
+    print(f"\nRunning {key} for N={args.N}...")
     print(f"Timeout: {args.timeout} seconds")
     print(f"Output will be saved to: {output_file}\n")
 
-    # Run the scheduler
-    result = run_scheduler(args.teams, args.timeout)
+    result = run_scheduler(args.N, args.solver, args.timeout)
 
-    # Create the final JSON structure
-    approach_name = "MIP-CBC_MILP"
+    # Merge into existing file (preserves other solver keys in the same JSON)
+    existing = {}
+    if os.path.exists(output_file):
+        with open(output_file, "r") as f:
+            existing = json.load(f)
+    existing[key] = result
 
-    json_output = {
-        approach_name: result
-    }
+    with open(output_file, "w") as f:
+        json.dump(existing, f, indent=2)
 
-    # Write to JSON file
-    with open(output_file, 'w') as f:
-        json.dump(json_output, f, indent=2)
-
-    # Print summary
+    # summary
     print("\n" + "=" * 80)
     print("RESULTS SUMMARY")
     print("=" * 80)
-    print(f"Teams: {args.teams}")
-    print(f"Time: {result['time']} seconds")
-    print(f"Optimal: {result['optimal']}")
-    print(f"Objective (Total Imbalance): {result['obj']}")
-    print(f"Solution: {'Found' if len(result['sol']) > 0 else 'Not found'}")
+    print(f"Teams:                        {args.N}")
+    print(f"Solver:                       {args.solver}")
+    print(f"Time:                         {result['time']} seconds")
+    print(f"Optimal:                      {result['optimal']}")
+    print(f"Objective (Total Imbalance):  {result['obj']}")
+    print(f"Solution:                     {'Found' if result['sol'] else 'Not found'}")
     print(f"\nResults saved to: {output_file}")
     print("=" * 80 + "\n")
 
-    # Return appropriate exit code
     sys.exit(0 if result['optimal'] else 1)
 
 

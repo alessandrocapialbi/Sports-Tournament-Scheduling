@@ -1,7 +1,27 @@
 from pulp import *
 import sys
+import argparse
 
-def optimize(n, gap=0.01):
+SOLVERS = {}
+
+def register_solver(name):
+    """Decorator that registers a solver factory."""
+    def decorator(fn):
+        SOLVERS[name] = fn
+        return fn
+    return decorator
+
+@register_solver("cbc")
+def _make_cbc(gap):
+    return PULP_CBC_CMD(msg=False, gapRel=gap, threads=1)
+
+
+@register_solver("highs")
+def _make_highs(gap):
+    return HiGHS(msg=False, gapRel=gap, threads=1)
+
+
+def optimize(n, solver_name, gap=0.01):
     # Validate input
     if n % 2 != 0:
         raise ValueError("Number of teams must be even")
@@ -166,7 +186,13 @@ def optimize(n, gap=0.01):
     model += imbalance, "objective"
 
     # Solve
-    solver = PULP_CBC_CMD( msg=False, gapRel=gap, threads=1)
+    if solver_name not in SOLVERS:
+        raise ValueError(
+            f"Unknown solver '{solver_name}'. Available solvers: "
+            + ", ".join(sorted(SOLVERS))
+        )
+
+    solver = SOLVERS[solver_name](gap=gap)
     model.solve(solver)
 
     # Extract results
@@ -253,16 +279,21 @@ def print_schedule(result, n):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python round_robin_scheduler.py <number_of_teams>")
-        print("Example: python round_robin_scheduler.py 12")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        prog="round_robin_scheduler",
+        description="Generate an optimised round-robin tournament schedule."
+    )
+    parser.add_argument("--N", type=int, required=True,
+                        help="Number of teams (must be even, >= 6)")
+    parser.add_argument("--solver",
+                        required=True,
+                        choices=sorted(SOLVERS),
+                        help=f"Solver backend. Available: {', '.join(sorted(SOLVERS))}")
+    parser.add_argument("--gap", type=float, default=0.01,
+                        help="MIP optimality gap tolerance (default: 0.01)")
 
-    try:
-        n = int(sys.argv[1])
-    except ValueError:
-        print(f"Error: '{sys.argv[1]}' is not a valid integer")
-        sys.exit(1)
+    args = parser.parse_args()
+    n = args.N
 
     # Validate input
     if n < 6:
@@ -276,13 +307,15 @@ def main():
     print(f"Total weeks: {n - 1}")
     print(f"Matches per week: {n // 2}")
     print(f"Total matches: {(n - 1) * (n // 2)}")
+    print(f"Solver: {args.solver}")
     print("\nOptimizing...\n")
 
     try:
-        # Solve the problem
-        result = optimize(n)
-
-        # Print the results
+        result = optimize(
+            n,
+            gap=args.gap,
+            solver_name=args.solver
+        )
         print_schedule(result, n)
 
     except ValueError as e:
