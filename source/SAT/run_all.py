@@ -13,7 +13,7 @@ def main():
     os.makedirs(save_dir, exist_ok=True)
 
     solvers = ["z3", "ortools"]
-    modes = ["satisfy", "optimize"]
+    mode = "both"
 
     for n in range(6, 23, 2):
 
@@ -22,42 +22,40 @@ def main():
         print("=" * 60)
 
         for solver in solvers:
-            for mode in modes:
+            cmd = [
+                sys.executable,
+                "source/SAT/run.py",
+                "--N", str(n),
+                "--mode", mode,
+                "--solver", solver,
+                "--outdir", save_dir,
+                "--timeout", str(TIMEOUT)
+            ]
 
-                cmd = [
-                    sys.executable,
-                    "source/SAT/run.py",
-                    "--N", str(n),
-                    "--mode", mode,
-                    "--solver", solver,
-                    "--outdir", save_dir,
-                    "--timeout", str(TIMEOUT)
-                ]
+            start_time = time.time()
 
-                start_time = time.time()
+            try:
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=TIMEOUT
+                )
 
-                try:
-                    result = subprocess.run(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        timeout=TIMEOUT
-                    )
+                runtime = math.floor(time.time() - start_time)
 
-                    runtime = math.floor(time.time() - start_time)
+                print(f"\n{solver}-{mode} runtime: {runtime}s")
 
-                    print(f"\n{solver}-{mode} runtime: {runtime}s")
+                if result.stdout:
+                    print(result.stdout)
 
-                    if result.stdout:
-                        print(result.stdout)
+                if result.stderr:
+                    print("Errors:")
+                    print(result.stderr)
 
-                    if result.stderr:
-                        print("Errors:")
-                        print(result.stderr)
-
-                except subprocess.TimeoutExpired:
-                    print(f"Timeout at N={n} ({solver}-{mode})")
+            except subprocess.TimeoutExpired:
+                print(f"Timeout at N={n} ({solver}-{mode})")
 
     print("\nBatch execution completed.")
 
