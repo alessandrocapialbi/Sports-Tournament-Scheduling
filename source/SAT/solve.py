@@ -202,155 +202,116 @@ def optimize(N, backend='z3'):
         encode_exact_count(solver, team_home_indicators, home_count_vars[t], N - 1, f'home_t{t}')
         encode_exact_count(solver, team_away_indicators, away_count_vars[t], N - 1, f'away_t{t}')
 
-        # Compute imbalance
-        diff_vars = {}
+    # Compute imbalance
+    diff_vars = {}
 
-        for t in T:
-            diff_vars[t] = encode_integer_onehot(solver, f'diff_{t}', N - 1)
-            exactly_one(diff_vars[t], solver, f'diff_eo_{t}')
+    for t in T:
+        diff_vars[t] = encode_integer_onehot(solver, f'diff_{t}', N - 1)
+        exactly_one(diff_vars[t], solver, f'diff_eo_{t}')
 
-            if isinstance(solver, ORToolsBackend):
-                # ortools
-                # case enumeration
-                for d in range(N):
-                    cases = []
-                    for h in range(N):
-                        for a in range(N):
-                            if abs(h - a) == d:
-                                cases.append((h, a))
-                    if cases:
-                        # diff_vars[t][d] <=> OR over (home_count[h] AND away_count[a]) for valid (h,a)
-                        case_auxes = []
-                        for h, a in cases:
-                            aux = solver.create_bool_var(f'abs_case_{t}_{d}_{h}_{a}')
-                            solver.model.AddBoolAnd([home_count_vars[t][h], away_count_vars[t][a]]).OnlyEnforceIf(aux)
-                            solver.model.AddBoolOr(
-                                [home_count_vars[t][h].Not(), away_count_vars[t][a].Not()]).OnlyEnforceIf(aux.Not())
-                            case_auxes.append(aux)
-                        # diff_vars[t][d] => at least one case is true
-                        solver.model.AddBoolOr(case_auxes).OnlyEnforceIf(diff_vars[t][d])
-                        # if any case is true => diff_vars[t][d]
-                        for aux in case_auxes:
-                            solver.model.AddImplication(aux, diff_vars[t][d])
-                    else:
-                        solver.model.Add(diff_vars[t][d] == 0)
-            else:
-                # z3
-                # case enumeration
-                for d in range(N):
-                    cases = []
-                    for h in range(N):
-                        for a in range(N):
-                            if abs(h - a) == d:
-                                cases.append(And(home_count_vars[t][h], away_count_vars[t][a]))
-                    # diff_vars[t][d] <=> Or(cases)
-                    if cases:
-                        solver.add_constraint(Implies(diff_vars[t][d], Or(cases)))
-                        solver.add_constraint(Implies(Or(cases), diff_vars[t][d]))
-                    else:
-                        solver.add_constraint(Not(diff_vars[t][d]))
-
-        # Minimize total imbalance
         if isinstance(solver, ORToolsBackend):
-            # 1. Create a one-hot encoding for the total imbalance value
-            max_imb = N * (N - 1)
-            total_imb_vars = encode_integer_onehot(solver, 'total_imb', max_imb)
-            exactly_one(total_imb_vars, solver, 'total_imb_eo')
-
-            # 2. Channeling: total_imb_vars[v] <=> (sum of per-team diffs == v).
-            #    introduce an aux bool per tuple, then enforce the biconditional via
-            #    implications in both directions.
-            for v in range(max_imb + 1):
-                # Build the set of valid per-team diff tuples that sum to v
-                teams = list(T)
-
-                def _enum(idx, remaining, teams=teams):
-                    if idx == len(teams):
-                        if remaining == 0:
-                            yield []
-                        return
-                    t = teams[idx]
-                    for k in range(min(N, remaining + 1)):
-                        for rest in _enum(idx + 1, remaining - k):
-                            yield [(t, k)] + rest
-
-                combo_auxes = []
-                for combo in _enum(0, v):
-                    conjuncts = [diff_vars[t][k] for t, k in combo]
-                    aux = solver.create_bool_var(f'timb_combo_{v}_{"_".join(f"{t}d{k}" for t, k in combo)}')
-                    solver.model.AddBoolAnd(conjuncts).OnlyEnforceIf(aux)
-                    solver.model.AddBoolOr([c.Not() for c in conjuncts]).OnlyEnforceIf(aux.Not())
-                    combo_auxes.append(aux)
-
-                if combo_auxes:
-                    # total_imb_vars[v] => at least one combo is true
-                    solver.model.AddBoolOr(combo_auxes).OnlyEnforceIf(total_imb_vars[v])
-                    # any combo true => total_imb_vars[v]
-                    for aux in combo_auxes:
-                        solver.model.AddImplication(aux, total_imb_vars[v])
+            # OR-Tools: pure boolean case enumeration (same as Z3 branch)
+            for d in range(N):
+                cases = []
+                for h in range(N):
+                    for a in range(N):
+                        if abs(h - a) == d:
+                            cases.append((h, a))
+                if cases:
+                    # diff_vars[t][d] <=> OR over (home_count[h] AND away_count[a]) for valid (h,a)
+                    case_auxes = []
+                    for h, a in cases:
+                        aux = solver.create_bool_var(f'abs_case_{t}_{d}_{h}_{a}')
+                        solver.model.AddBoolAnd([home_count_vars[t][h], away_count_vars[t][a]]).OnlyEnforceIf(aux)
+                        solver.model.AddBoolOr([home_count_vars[t][h].Not(), away_count_vars[t][a].Not()]).OnlyEnforceIf(aux.Not())
+                        case_auxes.append(aux)
+                    # diff_vars[t][d] => at least one case is true
+                    solver.model.AddBoolOr(case_auxes).OnlyEnforceIf(diff_vars[t][d])
+                    # if any case is true => diff_vars[t][d]
+                    for aux in case_auxes:
+                        solver.model.AddImplication(aux, diff_vars[t][d])
                 else:
-                    # No combo sums to v — this value is impossible
-                    solver.model.Add(total_imb_vars[v] == 0)
-
-            # 3. Minimize via weighted sum of the one-hot bits:
-            solver.minimize(sum(v * total_imb_vars[v] for v in range(max_imb + 1)))
-
-            start_time = time.time()
-            result = solver.check()
-            elapsed_time = time.time() - start_time
-
-            if result == 'SAT':
-                solution = extract_solution(
-                    solver.get_model(), P, W, M,
-                    matches_idx_vars,
-                    home_is_first_vars=home_is_first_vars,
-                    home_count_vars=home_count_vars,
-                    away_count_vars=away_count_vars,
-                    diff_vars=diff_vars,
-                    T=T,
-                    N=N,
-                    backend=backend  # Explicitly named
-                )
-                print_solution(N, W, P, match_pairs, solution)
-
-                stats = solver.get_statistics()
-                print(f"\nSolver statistics:")
-                print(f"  Status: {stats['status']}")
-                print(f"  Objective: {stats['objective']}")
-                print(f"  Time: {elapsed_time:.2f}s")
-                print(f"  Branches: {stats['branches']}")
-                print(f"  Conflicts: {stats['conflicts']}")
-
-                return solution, elapsed_time
-            else:
-                print("No solution found")
-                return None, elapsed_time
+                    solver.model.Add(diff_vars[t][d] == 0)
         else:
-            # Z3: iterative search
-            best_solution = None
-            start_time = time.time()
+            # Z3: enumerate cases
+            for d in range(N):
+                cases = []
+                for h in range(N):
+                    for a in range(N):
+                        if abs(h - a) == d:
+                            cases.append(And(home_count_vars[t][h], away_count_vars[t][a]))
+                if cases:
+                    solver.add_constraint(Implies(diff_vars[t][d], Or(cases)))
+                    solver.add_constraint(Implies(Or(cases), diff_vars[t][d]))
+                else:
+                    solver.add_constraint(Not(diff_vars[t][d]))
 
-            for target in range(N, N * (N - 1) + 1):
-                print(f"Trying imbalance = {target}...")
-                solver.push()
-                constrain_total_imbalance(solver, diff_vars, T, N, target)
+    # Minimize total imbalance
+    if isinstance(solver, ORToolsBackend):
+        # diff_vars[t] is already a correctly-channelled one-hot over [0..N-1]
+        # encoding |home_count[t] - away_count[t]|.
+        # The total imbalance is simply the sum of each team's diff value.
+        # For a one-hot variable, sum(d * diff_vars[t][d]) equals the active index,
+        # so summing that over all teams gives the total imbalance directly as a
+        # linear expression over booleans — no auxiliary one-hot or channelling needed.
+        solver.minimize(sum(d * diff_vars[t][d] for t in T for d in range(N)))
 
-                result = solver.check()
-                if result == 'SAT':
-                    elapsed_time = time.time() - start_time
-                    print(f"Found solution with imbalance = {target}")
-                    best_solution = extract_solution(
-                        solver.get_model(), P, W, M,
-                        matches_idx_vars, home_is_first_vars,
-                        home_count_vars, away_count_vars, diff_vars, T, N, backend=backend
-                    )
-                    print_solution(N, W, P, match_pairs, best_solution)
-                    solver.pop()
-                    return best_solution, elapsed_time
+        start_time = time.time()
+        result = solver.check()
+        elapsed_time = time.time() - start_time
+
+        if result == 'SAT':
+            solution = extract_solution(
+                solver.get_model(), P, W, M,
+                matches_idx_vars,
+                home_is_first_vars=home_is_first_vars,
+                home_count_vars=home_count_vars,
+                away_count_vars=away_count_vars,
+                diff_vars=diff_vars,
+                T=T,
+                N=N,
+                backend=backend  # Explicitly named
+            )
+            print_solution(N, W, P, match_pairs, solution)
+
+            stats = solver.get_statistics()
+            print(f"\nSolver statistics:")
+            print(f"  Status: {stats['status']}")
+            print(f"  Objective: {stats['objective']}")
+            print(f"  Time: {elapsed_time:.2f}s")
+            print(f"  Branches: {stats['branches']}")
+            print(f"  Conflicts: {stats['conflicts']}")
+
+            return solution, elapsed_time
+        else:
+            print("No solution found")
+            return None, elapsed_time
+    else:
+        # Z3: iterative search
+        best_solution = None
+        start_time = time.time()
+
+        for target in range(N, N * (N - 1) + 1):
+            print(f"Trying imbalance = {target}...")
+            solver.push()
+            constrain_total_imbalance(solver, diff_vars, T, N, target)
+
+            result = solver.check()
+            if result == 'SAT':
+                elapsed_time = time.time() - start_time
+                print(f"✓ Found solution with imbalance = {target}")
+                best_solution = extract_solution(
+                    solver.get_model(), P, W, M,
+                    matches_idx_vars, home_is_first_vars,
+                    home_count_vars, away_count_vars, diff_vars, T, N, backend=backend
+                )
+                print_solution(N, W, P, match_pairs, best_solution)
                 solver.pop()
+                return best_solution, elapsed_time
+            solver.pop()
 
-            elapsed_time = time.time() - start_time
-            return best_solution, elapsed_time
+        elapsed_time = time.time() - start_time
+        return best_solution, elapsed_time
 
 
 def main():

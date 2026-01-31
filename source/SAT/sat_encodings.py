@@ -150,14 +150,41 @@ def constrain_total_imbalance(solver, diff_vars, T, N, target):
     """Add constraint that sum of all team differences equals target."""
 
     if is_ortools_backend(solver):
-        # OR-Tools version - use integer variables
-        team_diffs = []
-        for t in T:
-            diff_val = solver.model.NewIntVar(0, N - 1, f'team_{t}_diff_val')
-            for k in range(N):
-                solver.model.Add(diff_val == k).OnlyEnforceIf(diff_vars[t][k])
-            team_diffs.append(diff_val)
-        solver.model.Add(sum(team_diffs) == target)
+        # OR-Tools version - pure boolean: enumerate all tuples of per-team
+        # diff values whose sum equals target, then OR the conjunctions.
+        teams = list(T)
+
+        def _enum_combos(idx, remaining):
+            """Yield all assignments (list of (team, k) pairs) that sum to `remaining`."""
+            if idx == len(teams):
+                if remaining == 0:
+                    yield []
+                return
+            t = teams[idx]
+            for k in range(min(N, remaining + 1)):
+                for rest in _enum_combos(idx + 1, remaining - k):
+                    yield [(t, k)] + rest
+
+        combo_literals = []
+        for combo in _enum_combos(0, target):
+            # Each combo is a list of (team, diff_value) pairs
+            conjuncts = [diff_vars[t][k] for t, k in combo]
+            if len(conjuncts) == 1:
+                combo_literals.append(conjuncts[0])
+            else:
+                # Introduce an auxiliary bool that is true iff all conjuncts hold
+                aux = solver.model.NewBoolVar(f'combo_{"_".join(f"{t}d{k}" for t, k in combo)}')
+                solver.model.AddBoolAnd(conjuncts).OnlyEnforceIf(aux)
+                solver.model.AddBoolOr([v.Not() for v in conjuncts]).OnlyEnforceIf(aux.Not())
+                combo_literals.append(aux)
+
+        if combo_literals:
+            solver.model.AddBoolOr(combo_literals)
+        else:
+            # No valid combination exists — force UNSAT
+            f = solver.model.NewBoolVar('unsat_flag')
+            solver.model.Add(f == 1)
+            solver.model.Add(f == 0)
     else:
         # Z3 version - enumerate valid combinations
         def find_combinations(teams_left, current_sum, current_assignment):
