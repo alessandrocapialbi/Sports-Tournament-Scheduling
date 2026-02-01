@@ -118,21 +118,23 @@ python source/SAT/run.py --N 10 --mode optimize --solver ortools --timeout 600
 ```
 
 ### Mixed Integer Programming (MIP)
-
 #### Run the MIP solver:
-
 ```bash
-python source/MIP/run.py -n <num_teams> -o <output_dir> [-t <timeout>]
+python source/MIP/run.py --N <num_teams> --solver <solver> [--timeout <seconds>] [--outdir <output_dir>] [--no-skip-non-solvable]
 ```
-
 **Parameters:**
-- `-n, --teams`: Number of teams (must be even, minimum 6)
-- `-o, --outdir`: Output directory for results
-- `-t, --timeout`: Time limit in seconds (default: 300)
+- `--N`: Number of teams (must be even, minimum 6)
+- `--solver`: Solver to use:
+  - `cbc`: COIN-OR CBC solver
+  - `highs`: HiGHS solver
+- `--timeout`: Time limit in seconds (default: 300)
+- `--outdir`: Output directory for results (default: `res`)
+- `--no-skip-non-solvable`: Don't skip instances known to be non-solvable (optional)
 
 **Example:**
 ```bash
-python source/MIP/run.py -n 12 -o res/MIP -t 300
+python source/MIP/run.py --N 12 --solver cbc --timeout 300
+python source/MIP/run.py --N 12 --solver highs --timeout 300 --outdir res/MIP
 ```
 
 ## Running All Models Automatically
